@@ -10,7 +10,7 @@ mod middlewares;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 
 use core::database::create_db_pool;
-use routes::{client_routes, user_routes};
+use routes::{ user_routes};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -22,8 +22,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
-            .configure(user_routes::configure)
-            .configure(client_routes::configure)
+            .configure(user_routes::config)
             .route("/", web::get().to(health_check))
     })
     .bind("127.0.0.1:8000")?

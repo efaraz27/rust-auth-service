@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use diesel::result::Error;
 
 const BAD_REQUEST: u16 = 400;
 const UNAUTHORIZED: u16 = 401;
@@ -82,12 +81,17 @@ pub struct Exception {
     pub payload: Option<Value>,
 }
 
-impl Default for Exception {
+impl Exception {
     fn default() -> Self {
         Self {
             status_code: BAD_REQUEST,
             message: None,
             payload: None,
         }
+    }
+
+    pub fn to_http_response(&self) -> actix_web::HttpResponse {
+        actix_web::HttpResponse::build(actix_web::http::StatusCode::from_u16(self.status_code).unwrap())
+            .json(self)
     }
 }

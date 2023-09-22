@@ -1,11 +1,10 @@
 use actix_web::dev::ServiceRequest;
-use actix_web::error::InternalError;
-use actix_web::http::StatusCode;
 use actix_web::web;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
 use crate::core::database::DbPool;
+use crate::core::exceptions::{Exception, ExceptionBuilder};
 use crate::models::User;
 use crate::services::user_service;
 
@@ -19,59 +18,64 @@ pub struct Claims {
 }
 
 /// Generate a JWT token for the given email and expiration time.
-pub fn generate_token(email: &str, expiration: usize) -> Result<String, actix_web::Error> {
+pub fn generate_token(email: &str, expiration: usize) -> Result<String, Exception> {
     let claims = Claims {
         sub: email.to_string(),
         exp: expiration,
     };
 
-    encode(
+    match encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(SECRET_KEY),
-    )
-    .map_err(|err| InternalError::new(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR).into())
+    ) {
+        Ok(token) => Ok(token),
+        Err(_) => Err(ExceptionBuilder::new_internal_server_error_exception()
+            .message("Failed to generate token".to_string())
+            .build()),
+    }
 }
 
 /// Decode a JWT token and return its claims.
-pub fn decode_token(token: &str) -> Result<Claims, actix_web::Error> {
-    decode::<Claims>(
+pub fn decode_token(token: &str) -> Result<Claims, Exception> {
+    match decode::<Claims>(
         token,
         &DecodingKey::from_secret(SECRET_KEY),
         &Validation::default(),
-    )
-    .map(|data| data.claims)
-    .map_err(|err| InternalError::new(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR).into())
+    ) {
+        Ok(token_data) => Ok(token_data.claims),
+        Err(_) => Err(ExceptionBuilder::new_forbidden_exception()
+            .message("Failed to decode token".to_string())
+            .build()),
+    }
 }
 
 /// Get the authenticated user from the given request.
 pub async fn get_authenticated_user_from_request(
     req: &ServiceRequest,
-) -> Result<Option<User>, actix_web::Error> {
-    let headers = req.headers();
-    if let Some(auth_header) = headers.get("Authorization") {
-        let auth_header = auth_header.to_str().map_err(|err| {
-            InternalError::new(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
-        let token = auth_header.replace("Bearer ", "");
-        let claims = decode_token(&token)?;
-        let pool = req
-            .app_data::<web::Data<DbPool>>()
-            .ok_or_else(|| {
-                InternalError::new(
-                    "Failed to get DB pool from request",
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?
-            .clone();
-        let user = user_service::find_user_by_email(pool, &claims.sub)
-            .await
-            .map_err(|err| {
-                InternalError::new(err.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
-            })?;
+) -> Result<Option<User>, Exception> {
+    let auth_header = req.headers().get("Authorization");
 
-        Ok(Some(user))
-    } else {
-        Ok(None)
-    }
+    let access_token = match auth_header {
+        Some(token) => token.to_str().unwrap().replace("Bearer ", ""),
+        None => return Ok(None),
+    };
+
+    let claims = decode_token(&access_token)?;
+
+    let pool = match req.app_data::<web::Data<DbPool>>() {
+        Some(pool) => pool.clone(),
+        None => {
+            return Err(ExceptionBuilder::new_internal_server_error_exception()
+                .message("Something went wrong".to_string())
+                .build())
+        }
+    };
+
+    let user = match user_service::find_user_by_email(pool, &claims.sub).await {
+        Ok(user) => user,
+        Err(err) => return Err(err),
+    };
+
+    Ok(Some(user))
 }
